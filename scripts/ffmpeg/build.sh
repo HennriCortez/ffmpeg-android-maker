@@ -48,7 +48,6 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 ${DEP_LD_FLAGS}"
   --enable-shared \
   --disable-static \
   --enable-jni \
-  --enable-android \
   --enable-mediandk \
   --enable-pthreads \
   --enable-mediacodec \
