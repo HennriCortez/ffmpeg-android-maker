@@ -2,56 +2,76 @@
 
 set -euo pipefail
 
-case "$ANDROID_ABI" in
-  x86)
-    EXTRA_BUILD_CONFIGURATION_FLAGS="${EXTRA_BUILD_CONFIGURATION_FLAGS:-} --disable-asm"
-    ;;
+checkVariablePresence() {
+  local variable_name="$1"
+  local message="$2"
 
-  x86_64)
-    EXTRA_BUILD_CONFIGURATION_FLAGS="${EXTRA_BUILD_CONFIGURATION_FLAGS:-} --x86asmexe=${NASM_EXECUTABLE}"
-    ;;
-esac
+  if [[ -z "${!variable_name:-}" ]]; then
+    echo "The ${variable_name} environment variable is not defined." >&2
+    echo "$message" >&2
+    exit 1
+  fi
+}
 
-if [[ "${FFMPEG_GPL_ENABLED:-false}" == "true" ]]; then
-  EXTRA_BUILD_CONFIGURATION_FLAGS="${EXTRA_BUILD_CONFIGURATION_FLAGS:-} --enable-gpl"
+checkCommandPresence() {
+  local command_name="$1"
+
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "Required command is missing: ${command_name}" >&2
+    exit 1
+  fi
+}
+
+checkVariablePresence \
+  "ANDROID_SDK_HOME" \
+  "Set ANDROID_SDK_HOME to the absolute Android SDK path."
+
+checkVariablePresence \
+  "ANDROID_NDK_HOME" \
+  "Set ANDROID_NDK_HOME to the absolute Android NDK path."
+
+if [[ ! -d "$ANDROID_SDK_HOME" ]]; then
+  echo "ANDROID_SDK_HOME is not a directory: $ANDROID_SDK_HOME" >&2
+  exit 1
 fi
 
-ADDITIONAL_COMPONENTS=""
+if [[ ! -d "$ANDROID_NDK_HOME" ]]; then
+  echo "ANDROID_NDK_HOME is not a directory: $ANDROID_NDK_HOME" >&2
+  exit 1
+fi
 
-for library_name in ${FFMPEG_EXTERNAL_LIBRARIES:-}; do
-  ADDITIONAL_COMPONENTS="${ADDITIONAL_COMPONENTS} --enable-${library_name}"
+for command_name in \
+  curl \
+  git \
+  make \
+  cmake \
+  pkg-config \
+  nasm \
+  ninja \
+  meson \
+  tar \
+  unzip \
+  strings
+do
+  checkCommandPresence "$command_name"
 done
 
-DEP_CFLAGS="-I${BUILD_DIR_EXTERNAL}/${ANDROID_ABI}/include"
-DEP_LD_FLAGS="-L${BUILD_DIR_EXTERNAL}/${ANDROID_ABI}/lib ${FFMPEG_EXTRA_LD_FLAGS:-}"
+SDKMANAGER="$ANDROID_SDK_HOME/cmdline-tools/latest/bin/sdkmanager"
 
-EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 ${DEP_LD_FLAGS}"
+if [[ ! -x "$SDKMANAGER" ]]; then
+  SDKMANAGER="$ANDROID_SDK_HOME/cmdline-tools/bin/sdkmanager"
+fi
 
-./configure \
-  --prefix="${BUILD_DIR_FFMPEG}/${ANDROID_ABI}" \
-  --enable-cross-compile \
-  --target-os=android \
-  --arch="${TARGET_TRIPLE_MACHINE_ARCH}" \
-  --sysroot="${SYSROOT_PATH}" \
-  --cc="${FAM_CC}" \
-  --cxx="${FAM_CXX}" \
-  --ld="${FAM_LD}" \
-  --ar="${FAM_AR}" \
-  --as="${FAM_CC}" \
-  --nm="${FAM_NM}" \
-  --ranlib="${FAM_RANLIB}" \
-  --strip="${FAM_STRIP}" \
-  --extra-cflags="-O3 -fPIC ${DEP_CFLAGS}" \
-  --extra-ldflags="${EXTRA_LDFLAGS}" \
-  --enable-shared \
-  --disable-static \
-  --disable-vulkan \
-  --enable-jni \
-  --enable-mediacodec \
-  --pkg-config="${PKG_CONFIG_EXECUTABLE}" \
-  ${EXTRA_BUILD_CONFIGURATION_FLAGS:-} \
-  ${ADDITIONAL_COMPONENTS}
+if [[ ! -x "$SDKMANAGER" ]]; then
+  echo "Android sdkmanager was not found." >&2
+  exit 1
+fi
 
-"${MAKE_EXECUTABLE}" clean
-"${MAKE_EXECUTABLE}" -j"${HOST_NPROC}"
-"${MAKE_EXECUTABLE}" install
+if [[ ! -d "$ANDROID_NDK_HOME/toolchains/llvm" ]]; then
+  echo "Android NDK LLVM toolchain was not found." >&2
+  exit 1
+fi
+
+echo "Android SDK: $ANDROID_SDK_HOME"
+echo "Android NDK: $ANDROID_NDK_HOME"
+echo "Host machine checks passed."
