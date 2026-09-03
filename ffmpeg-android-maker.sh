@@ -1,124 +1,186 @@
 #!/usr/bin/env bash
 
-# Defining essential directories
+set -euo pipefail
 
-# The root of the project
-export BASE_DIR="$( cd "$( dirname "$0" )" && pwd )"
-# Directory that contains source code for FFmpeg and its dependencies
-# Each library has its own subdirectory
-# Multiple versions of the same library can be stored inside librarie's directory
-export SOURCES_DIR=${BASE_DIR}/sources
-# Directory to place some statistics about the build.
-# Currently - the info about Text Relocations
-export STATS_DIR=${BASE_DIR}/stats
-# Directory that contains helper scripts and
-# scripts to download and build FFmpeg and each dependency separated by subdirectories
-export SCRIPTS_DIR=${BASE_DIR}/scripts
-# The directory to use by Android project
-# All FFmpeg's libraries and headers are copied there
-export OUTPUT_DIR=${BASE_DIR}/output
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Check the host machine for proper setup and fail fast otherwise
-${SCRIPTS_DIR}/check-host-machine.sh || exit 1
+export BASE_DIR
+export SOURCES_DIR="${BASE_DIR}/sources"
+export STATS_DIR="${BASE_DIR}/stats"
+export SCRIPTS_DIR="${BASE_DIR}/scripts"
+export OUTPUT_DIR="${BASE_DIR}/output"
 
-# Directory to use as a place to build/install FFmpeg and its dependencies
-BUILD_DIR=${BASE_DIR}/build
-# Separate directory to build FFmpeg to
-export BUILD_DIR_FFMPEG=$BUILD_DIR/ffmpeg
-# All external libraries are installed to a single root
-# to make easier referencing them when FFmpeg is being built.
-export BUILD_DIR_EXTERNAL=$BUILD_DIR/external
+"${SCRIPTS_DIR}/check-host-machine.sh"
 
-# Function that copies *.so files and headers of the current ANDROID_ABI
-# to the proper place inside OUTPUT_DIR
-function prepareOutput() {
-  OUTPUT_LIB=${OUTPUT_DIR}/lib/${ANDROID_ABI}
-  mkdir -p ${OUTPUT_LIB}
-  cp ${BUILD_DIR_FFMPEG}/${ANDROID_ABI}/lib/*.so ${OUTPUT_LIB}
+BUILD_DIR="${BASE_DIR}/build"
 
-  OUTPUT_HEADERS=${OUTPUT_DIR}/include/${ANDROID_ABI}
-  mkdir -p ${OUTPUT_HEADERS}
-  cp -r ${BUILD_DIR_FFMPEG}/${ANDROID_ABI}/include/* ${OUTPUT_HEADERS}
+export BUILD_DIR
+export BUILD_DIR_FFMPEG="${BUILD_DIR}/ffmpeg"
+export BUILD_DIR_EXTERNAL="${BUILD_DIR}/external"
+
+prepareOutput() {
+  local abi="$1"
+
+  local output_lib="${OUTPUT_DIR}/lib/${abi}"
+  local output_headers="${OUTPUT_DIR}/include/${abi}"
+
+  mkdir -p "$output_lib"
+  mkdir -p "$output_headers"
+
+  cp "${BUILD_DIR_FFMPEG}/${abi}/lib/"*.so "$output_lib/"
+  cp -r "${BUILD_DIR_FFMPEG}/${abi}/include/"* "$output_headers/"
 }
 
-# Saving stats about text relocation presence.
-# If the result file doesn't have 'TEXTREL' at all, then we are good.
-# Otherwise the whole script is interrupted
-function checkTextRelocations() {
-  TEXT_REL_STATS_FILE=${STATS_DIR}/text-relocations.txt
-  ${FAM_READELF} --dynamic ${BUILD_DIR_FFMPEG}/${ANDROID_ABI}/lib/*.so | grep 'TEXTREL\|File' >> ${TEXT_REL_STATS_FILE}
+findFfmpegBinary() {
+  local abi="$1"
+  local prefix="${BUILD_DIR_FFMPEG}/${abi}"
 
-  if grep -q TEXTREL ${TEXT_REL_STATS_FILE}; then
-    echo "There are text relocations in output files:"
-    cat ${TEXT_REL_STATS_FILE}
+  local candidates=(
+    "${prefix}/bin/ffmpeg"
+    "${prefix}/ffmpeg"
+    "${BUILD_DIR}/${abi}/ffmpeg"
+  )
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "Could not find FFmpeg executable for ${abi}." >&2
+  echo "Searched:" >&2
+  printf '  %s\n' "${candidates[@]}" >&2
+  return 1
+}
+
+validateMediaCodec() {
+  local abi="$1"
+  local ffmpeg_binary="$2"
+
+  if [[ ! -x "$ffmpeg_binary" ]]; then
+    chmod +x "$ffmpeg_binary"
+  fi
+
+  local hwaccels_file="${STATS_DIR}/${abi}-hwaccels.txt"
+  local decoders_file="${STATS_DIR}/${abi}-decoders.txt"
+
+  echo "Checking FFmpeg hardware backends for ${abi}..."
+
+  "$ffmpeg_binary" \
+    -hide_banner \
+    -hwaccels \
+    2>&1 | tee "$hwaccels_file"
+
+  if ! grep -Eiq '^[[:space:]]*mediacodec[[:space:]]*$' "$hwaccels_file"; then
+    echo "ERROR: MediaCodec hardware acceleration is missing for ${abi}." >&2
+    exit 1
+  fi
+
+  "$ffmpeg_binary" \
+    -hide_banner \
+    -decoders \
+    2>&1 | tee "$decoders_file"
+
+  if ! grep -Eiq 'mediacodec' "$decoders_file"; then
+    echo "ERROR: MediaCodec decoders are missing for ${abi}." >&2
+    exit 1
+  fi
+
+  "$ffmpeg_binary" \
+    -hide_banner \
+    -version \
+    > "${STATS_DIR}/${abi}-version.txt" 2>&1
+
+  echo "MediaCodec validation passed for ${abi}."
+}
+
+checkTextRelocations() {
+  local abi="$1"
+  local text_rel_stats_file="${STATS_DIR}/text-relocations.txt"
+  local shared_library
+
+  : > "$text_rel_stats_file"
+
+  for shared_library in "${BUILD_DIR_FFMPEG}/${abi}/lib/"*.so; do
+    "${FAM_READELF}" \
+      --dynamic \
+      "$shared_library" \
+      | grep -E 'TEXTREL|File' \
+      >> "$text_rel_stats_file" || true
+  done
+
+  if grep -q 'TEXTREL' "$text_rel_stats_file"; then
+    echo "ERROR: Text relocations detected for ${abi}." >&2
+    cat "$text_rel_stats_file" >&2
     exit 1
   fi
 }
 
-# Actual work of the script
+rm -rf "$BUILD_DIR"
+rm -rf "$STATS_DIR"
+rm -rf "$OUTPUT_DIR"
 
-# Clearing previously created binaries
-rm -rf ${BUILD_DIR}
-rm -rf ${STATS_DIR}
-rm -rf ${OUTPUT_DIR}
-mkdir -p ${STATS_DIR}
-mkdir -p ${OUTPUT_DIR}
+mkdir -p "$BUILD_DIR"
+mkdir -p "$STATS_DIR"
+mkdir -p "$OUTPUT_DIR"
 
-# Exporting more necessary variabls
-source ${SCRIPTS_DIR}/export-host-variables.sh
-source ${SCRIPTS_DIR}/parse-arguments.sh
+source "${SCRIPTS_DIR}/export-host-variables.sh"
+source "${SCRIPTS_DIR}/parse-arguments.sh"
 
-# Treating FFmpeg as just a module to build after its dependencies
-COMPONENTS_TO_BUILD=${EXTERNAL_LIBRARIES[@]}
-COMPONENTS_TO_BUILD+=( "ffmpeg" )
+COMPONENTS_TO_BUILD=("${EXTERNAL_LIBRARIES[@]}")
+COMPONENTS_TO_BUILD+=("ffmpeg")
 
-# Get the source code of component to build
-for COMPONENT in ${COMPONENTS_TO_BUILD[@]}
-do
-  echo "Getting source code of the component: ${COMPONENT}"
-  SOURCE_DIR_FOR_COMPONENT=${SOURCES_DIR}/${COMPONENT}
+for component in "${COMPONENTS_TO_BUILD[@]}"; do
+  echo "Getting source code of component: ${component}"
 
-  mkdir -p ${SOURCE_DIR_FOR_COMPONENT}
-  cd ${SOURCE_DIR_FOR_COMPONENT}
+  source_directory="${SOURCES_DIR}/${component}"
+  mkdir -p "$source_directory"
 
-  # Executing the component-specific script for downloading the source code
-  source ${SCRIPTS_DIR}/${COMPONENT}/download.sh
+  pushd "$source_directory" >/dev/null
 
-  # The download.sh script has to export SOURCES_DIR_$COMPONENT variable
-  # with actual path of the source code. This is done for possiblity to switch
-  # between different verions of a component.
-  # If it isn't set, consider SOURCE_DIR_FOR_COMPONENT as the proper value
-  COMPONENT_SOURCES_DIR_VARIABLE=SOURCES_DIR_${COMPONENT}
-  if [[ -z "${!COMPONENT_SOURCES_DIR_VARIABLE}" ]]; then
-     export SOURCES_DIR_${COMPONENT}=${SOURCE_DIR_FOR_COMPONENT}
+  source "${SCRIPTS_DIR}/${component}/download.sh"
+
+  component_sources_variable="SOURCES_DIR_${component}"
+
+  if [[ -z "${!component_sources_variable:-}" ]]; then
+    export "${component_sources_variable}=${source_directory}"
   fi
 
-  # Returning to the rood directory. Just in case.
-  cd ${BASE_DIR}
+  popd >/dev/null
 done
 
-# Main build loop
-for ABI in ${FFMPEG_ABIS_TO_BUILD[@]}
-do
-  # Exporting variables for the current ABI
-  source ${SCRIPTS_DIR}/export-build-variables.sh ${ABI}
+for abi in ${FFMPEG_ABIS_TO_BUILD}; do
+  echo "Building ABI: ${abi}"
 
-  for COMPONENT in ${COMPONENTS_TO_BUILD[@]}
-  do
-    echo "Building the component: ${COMPONENT}"
-    COMPONENT_SOURCES_DIR_VARIABLE=SOURCES_DIR_${COMPONENT}
+  source "${SCRIPTS_DIR}/export-build-variables.sh" "$abi"
 
-    # Going to the actual source code directory of the current component
-    cd ${!COMPONENT_SOURCES_DIR_VARIABLE}
+  for component in "${COMPONENTS_TO_BUILD[@]}"; do
+    component_sources_variable="SOURCES_DIR_${component}"
+    component_source_directory="${!component_sources_variable}"
 
-    # and executing the component-specific build script
-    source ${SCRIPTS_DIR}/${COMPONENT}/build.sh || exit 1
+    echo "Building component: ${component}"
 
-    # Returning to the root directory. Just in case.
-    cd ${BASE_DIR}
+    pushd "$component_source_directory" >/dev/null
+    source "${SCRIPTS_DIR}/${component}/build.sh"
+    popd >/dev/null
   done
 
-  checkTextRelocations || exit 1
+  checkTextRelocations "$abi"
+  prepareOutput "$abi"
 
-  prepareOutput
+  ffmpeg_binary="$(findFfmpegBinary "$abi")"
+  validateMediaCodec "$abi" "$ffmpeg_binary"
+
+  mkdir -p "${OUTPUT_DIR}/bin/${abi}"
+  cp "$ffmpeg_binary" "${OUTPUT_DIR}/bin/${abi}/ffmpeg"
+  chmod +x "${OUTPUT_DIR}/bin/${abi}/ffmpeg"
+
+  echo "Completed Android ABI: ${abi}"
 done
+
+echo
+echo "Android FFmpeg build completed successfully."
+echo "FFmpeg output: ${OUTPUT_DIR}"
+echo "Validation output: ${STATS_DIR}"
