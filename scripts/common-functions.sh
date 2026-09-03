@@ -8,7 +8,7 @@ function downloadTarArchive() {
   # The url of the source code archive
   DOWNLOAD_URL=$2
   # Optional. If 'true' then the function creates an extra directory for archive extraction.
-  NEED_EXTRA_DIRECTORY=$3
+  NEED_EXTRA_DIRECTORY="${3:-false}"
 
   ARCHIVE_NAME=${DOWNLOAD_URL##*/}
   # File name without extension
