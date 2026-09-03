@@ -33,6 +33,8 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 $DEP_LD_FLAGS"
   --prefix=${BUILD_DIR_FFMPEG}/${ANDROID_ABI} \
   --enable-cross-compile \
   --target-os=android \
+  --enable-jni \
+  --enable-mediacodec \
   --arch=${TARGET_TRIPLE_MACHINE_ARCH} \
   --sysroot=${SYSROOT_PATH} \
   --cc=${FAM_CC} \
