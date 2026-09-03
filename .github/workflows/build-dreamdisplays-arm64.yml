@@ -54,17 +54,73 @@ jobs:
             --android-api-level=21
 
       - name: Validate MediaCodec
+        shell: bash
         run: |
-          find build -type f -name ffmpeg -print
-          ffmpeg_bin="$(find build -type f -path '*arm64-v8a*/ffmpeg' | head -n 1)"
-          test -n "$ffmpeg_bin"
-          test -x "$ffmpeg_bin"
-
-          "$ffmpeg_bin" -hide_banner -hwaccels 2>&1 | tee hwaccels.txt
-          grep -ix mediacodec hwaccels.txt
-
-          "$ffmpeg_bin" -hide_banner -decoders 2>&1 | tee decoders.txt
-          grep -i mediacodec decoders.txt
+          set -euo pipefail
+      
+          ffmpeg_bin="$(find build -type f -path '*arm64-v8a*/bin/ffmpeg' -print -quit)"
+      
+          if [[ -z "$ffmpeg_bin" ]]; then
+            echo "Android ARM64 FFmpeg executable was not found." >&2
+            exit 1
+          fi
+      
+          echo "Found FFmpeg: $ffmpeg_bin"
+      
+          echo "Checking ELF architecture..."
+          readelf -h "$ffmpeg_bin" | tee elf-header.txt
+      
+          grep -Eiq 'AArch64|ARM64' elf-header.txt || {
+            echo "FFmpeg is not an ARM64 executable." >&2
+            exit 1
+          }
+      
+          echo "Checking FFmpeg configuration..."
+      
+          config_files=()
+      
+          while IFS= read -r file; do
+            config_files+=("$file")
+          done < <(
+            find . -type f \
+              \( -name config.h -o -name config_components.h -o -name config.log \) \
+              -path '*arm64-v8a*' \
+              -print
+          )
+      
+          if [[ "${#config_files[@]}" -eq 0 ]]; then
+            echo "FFmpeg configuration files were not found." >&2
+            find build -type f -path '*arm64-v8a*' -print
+            exit 1
+          fi
+      
+          printf 'Configuration files:\n'
+          printf '  %s\n' "${config_files[@]}"
+      
+          cat "${config_files[@]}" | tee ffmpeg-configuration.txt
+      
+          grep -Eiq 'CONFIG_MEDIACODEC[[:space:]]+1|enable-mediacodec' \
+            ffmpeg-configuration.txt || {
+            echo "MediaCodec was not enabled in FFmpeg configuration." >&2
+            exit 1
+          }
+      
+          grep -Eiq 'CONFIG_JNI[[:space:]]+1|enable-jni' \
+            ffmpeg-configuration.txt || {
+            echo "JNI support was not enabled in FFmpeg configuration." >&2
+            exit 1
+          }
+      
+          echo "Checking MediaCodec symbols and strings..."
+      
+          strings "$ffmpeg_bin" | tee ffmpeg-strings.txt
+      
+          grep -Eiq 'mediacodec|MediaCodec' ffmpeg-strings.txt || {
+            echo "MediaCodec references were not found in the Android FFmpeg binary." >&2
+            exit 1
+          }
+      
+          echo "Static MediaCodec validation passed."
 
       - name: Package Android payload
         run: |
