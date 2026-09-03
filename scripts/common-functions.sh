@@ -1,33 +1,30 @@
 #!/usr/bin/env bash
 
-# Function that downloads an archive with the source code by the given url,
-# extracts its files and exports a variable SOURCES_DIR_${LIBRARY_NAME}
-function downloadTarArchive() {
-  # The full name of the library
-  LIBRARY_NAME=$1
-  # The url of the source code archive
-  DOWNLOAD_URL=$2
-  # Optional. If 'true' then the function creates an extra directory for archive extraction.
-  NEED_EXTRA_DIRECTORY="${3:-false}"
+set -euo pipefail
 
-  ARCHIVE_NAME=${DOWNLOAD_URL##*/}
-  # File name without extension
-  LIBRARY_SOURCES="${ARCHIVE_NAME%.tar.*}"
+downloadTarArchive() {
+  local library_name="$1"
+  local download_url="$2"
+  local need_extra_directory="${3:-false}"
 
-  echo "Ensuring sources of ${LIBRARY_NAME} in ${LIBRARY_SOURCES}"
+  local archive_name="${download_url##*/}"
+  local library_sources="${archive_name%.tar.*}"
 
-  if [[ ! -d "$LIBRARY_SOURCES" ]]; then
-    curl -LO ${DOWNLOAD_URL}
+  echo "Ensuring sources of ${library_name} in ${library_sources}"
 
-    EXTRACTION_DIR="."
-    if [ "$NEED_EXTRA_DIRECTORY" = true ] ; then
-      EXTRACTION_DIR=${LIBRARY_SOURCES}
-      mkdir ${EXTRACTION_DIR}
+  if [[ ! -d "$library_sources" ]]; then
+    curl -fL --retry 3 --retry-all-errors -O "$download_url"
+
+    local extraction_dir="."
+
+    if [[ "$need_extra_directory" == "true" ]]; then
+      extraction_dir="$library_sources"
+      mkdir -p "$extraction_dir"
     fi
 
-    tar xf ${ARCHIVE_NAME} -C ${EXTRACTION_DIR}
-    rm ${ARCHIVE_NAME}
+    tar xf "$archive_name" -C "$extraction_dir"
+    rm -f "$archive_name"
   fi
 
-  export SOURCES_DIR_${LIBRARY_NAME}=$(pwd)/${LIBRARY_SOURCES}
+  export "SOURCES_DIR_${library_name}=$(pwd)/${library_sources}"
 }
