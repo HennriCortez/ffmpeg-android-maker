@@ -1,0 +1,85 @@
+name: Build Android FFmpeg ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK and NDK
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;29.0.14206865"
+
+      - name: Export Android paths
+        run: |
+          echo "ANDROID_SDK_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            build-essential \
+            cmake \
+            curl \
+            git \
+            libtool \
+            make \
+            meson \
+            nasm \
+            ninja-build \
+            pkg-config \
+            unzip \
+            xz-utils
+
+      - name: Build arm64-v8a
+        run: |
+          chmod +x ffmpeg-android-maker.sh
+          ./ffmpeg-android-maker.sh \
+            --target-abis=arm64-v8a \
+            --android-api-level=21
+
+      - name: Validate MediaCodec
+        run: |
+          find build -type f -name ffmpeg -print
+          ffmpeg_bin="$(find build -type f -path '*arm64-v8a*/ffmpeg' | head -n 1)"
+          test -n "$ffmpeg_bin"
+          test -x "$ffmpeg_bin"
+
+          "$ffmpeg_bin" -hide_banner -hwaccels 2>&1 | tee hwaccels.txt
+          grep -ix mediacodec hwaccels.txt
+
+          "$ffmpeg_bin" -hide_banner -decoders 2>&1 | tee decoders.txt
+          grep -i mediacodec decoders.txt
+
+      - name: Package Android payload
+        run: |
+          mkdir -p android-payload/arm64-v8a
+          ffmpeg_bin="$(find build -type f -path '*arm64-v8a*/ffmpeg' | head -n 1)"
+          cp "$ffmpeg_bin" android-payload/arm64-v8a/ffmpeg
+          cp -r output/lib/arm64-v8a android-payload/arm64-v8a/lib
+          cp stats/arm64-v8a-hwaccels.txt android-payload/arm64-v8a/
+          cp stats/arm64-v8a-decoders.txt android-payload/arm64-v8a/
+
+      - name: Upload Android payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-android-arm64
+          path: android-payload
