@@ -62,20 +62,31 @@ jobs:
       
           if [[ -z "$ffmpeg_bin" ]]; then
             echo "Android ARM64 FFmpeg executable was not found." >&2
+            find build -type f -name ffmpeg -print
             exit 1
           fi
       
           echo "Found FFmpeg: $ffmpeg_bin"
       
           echo "Checking ELF architecture..."
-          readelf -h "$ffmpeg_bin" | tee elf-header.txt
+      
+          if command -v readelf >/dev/null 2>&1; then
+            readelf_bin="readelf"
+          elif command -v llvm-readelf >/dev/null 2>&1; then
+            readelf_bin="llvm-readelf"
+          else
+            echo "Neither readelf nor llvm-readelf is installed." >&2
+            exit 1
+          fi
+      
+          "$readelf_bin" -h "$ffmpeg_bin" | tee elf-header.txt
       
           grep -Eiq 'AArch64|ARM64' elf-header.txt || {
             echo "FFmpeg is not an ARM64 executable." >&2
             exit 1
           }
       
-          echo "Checking FFmpeg configuration..."
+          echo "Searching FFmpeg configuration files..."
       
           config_files=()
       
@@ -83,40 +94,57 @@ jobs:
             config_files+=("$file")
           done < <(
             find . -type f \
-              \( -name config.h -o -name config_components.h -o -name config.log \) \
-              -path '*arm64-v8a*' \
+              \( \
+                -name config.h \
+                -o -name config_components.h \
+                -o -name config.log \
+              \) \
               -print
           )
       
           if [[ "${#config_files[@]}" -eq 0 ]]; then
-            echo "FFmpeg configuration files were not found." >&2
-            find build -type f -path '*arm64-v8a*' -print
+            echo "No FFmpeg configuration files were found." >&2
+            find . -type f | sort
             exit 1
           fi
       
-          printf 'Configuration files:\n'
+          printf 'Found configuration files:\n'
           printf '  %s\n' "${config_files[@]}"
       
-          cat "${config_files[@]}" | tee ffmpeg-configuration.txt
+          : > ffmpeg-configuration.txt
       
-          grep -Eiq 'CONFIG_MEDIACODEC[[:space:]]+1|enable-mediacodec' \
+          for config_file in "${config_files[@]}"; do
+            {
+              echo
+              echo "===== ${config_file} ====="
+              cat "$config_file"
+            } >> ffmpeg-configuration.txt
+          done
+      
+          cat ffmpeg-configuration.txt
+      
+          echo "Checking CONFIG_MEDIACODEC..."
+      
+          grep -Eq '^[[:space:]]*#?[[:space:]]*define[[:space:]]+CONFIG_MEDIACODEC[[:space:]]+1' \
             ffmpeg-configuration.txt || {
-            echo "MediaCodec was not enabled in FFmpeg configuration." >&2
+            echo "ERROR: FFmpeg was not configured with MediaCodec." >&2
             exit 1
           }
       
-          grep -Eiq 'CONFIG_JNI[[:space:]]+1|enable-jni' \
+          echo "Checking CONFIG_JNI..."
+      
+          grep -Eq '^[[:space:]]*#?[[:space:]]*define[[:space:]]+CONFIG_JNI[[:space:]]+1' \
             ffmpeg-configuration.txt || {
-            echo "JNI support was not enabled in FFmpeg configuration." >&2
+            echo "ERROR: FFmpeg was not configured with JNI support." >&2
             exit 1
           }
       
-          echo "Checking MediaCodec symbols and strings..."
+          echo "Checking MediaCodec references in the binary..."
       
           strings "$ffmpeg_bin" | tee ffmpeg-strings.txt
       
           grep -Eiq 'mediacodec|MediaCodec' ffmpeg-strings.txt || {
-            echo "MediaCodec references were not found in the Android FFmpeg binary." >&2
+            echo "ERROR: MediaCodec references were not found in the FFmpeg binary." >&2
             exit 1
           }
       
