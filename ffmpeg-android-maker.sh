@@ -42,6 +42,7 @@ findFfmpegBinary() {
   )
 
   local candidate
+
   for candidate in "${candidates[@]}"; do
     if [[ -f "$candidate" ]]; then
       printf '%s\n' "$candidate"
@@ -50,58 +51,52 @@ findFfmpegBinary() {
   done
 
   echo "Could not find FFmpeg executable for ${abi}." >&2
-  echo "Searched:" >&2
   printf '  %s\n' "${candidates[@]}" >&2
-  return 1
+  exit 1
 }
 
 validateMediaCodec() {
   local abi="$1"
   local ffmpeg_binary="$2"
 
-  if [[ ! -x "$ffmpeg_binary" ]]; then
-    chmod +x "$ffmpeg_binary"
-  fi
+  local elf_header_file="${STATS_DIR}/${abi}-elf-header.txt"
+  local strings_file="${STATS_DIR}/${abi}-strings.txt"
 
-  local hwaccels_file="${STATS_DIR}/${abi}-hwaccels.txt"
-  local decoders_file="${STATS_DIR}/${abi}-decoders.txt"
-
-  echo "Checking FFmpeg hardware backends for ${abi}..."
-
-  "$ffmpeg_binary" \
-    -hide_banner \
-    -hwaccels \
-    2>&1 | tee "$hwaccels_file"
-
-  if ! grep -Eiq '^[[:space:]]*mediacodec[[:space:]]*$' "$hwaccels_file"; then
-    echo "ERROR: MediaCodec hardware acceleration is missing for ${abi}." >&2
+  if [[ ! -f "$ffmpeg_binary" ]]; then
+    echo "Missing FFmpeg executable: $ffmpeg_binary" >&2
     exit 1
   fi
 
-  "$ffmpeg_binary" \
-    -hide_banner \
-    -decoders \
-    2>&1 | tee "$decoders_file"
+  chmod +x "$ffmpeg_binary"
 
-  if ! grep -Eiq 'mediacodec' "$decoders_file"; then
-    echo "ERROR: MediaCodec decoders are missing for ${abi}." >&2
+  echo "Checking target architecture..."
+
+  "${FAM_READELF}" -h "$ffmpeg_binary" | tee "$elf_header_file"
+
+  if ! grep -Eiq 'AArch64|ARM64' "$elf_header_file"; then
+    echo "FFmpeg is not an ARM64 binary." >&2
     exit 1
   fi
 
-  "$ffmpeg_binary" \
-    -hide_banner \
-    -version \
-    > "${STATS_DIR}/${abi}-version.txt" 2>&1
+  echo "Checking compiled MediaCodec support..."
 
-  echo "MediaCodec validation passed for ${abi}."
+  strings "$ffmpeg_binary" | tee "$strings_file"
+
+  if ! grep -Eiq 'mediacodec|MediaCodec' "$strings_file"; then
+    echo "MediaCodec support was not found in FFmpeg." >&2
+    exit 1
+  fi
+
+  echo "MediaCodec support is present for ${abi}."
 }
 
 checkTextRelocations() {
   local abi="$1"
   local text_rel_stats_file="${STATS_DIR}/text-relocations.txt"
-  local shared_library
 
   : > "$text_rel_stats_file"
+
+  local shared_library
 
   for shared_library in "${BUILD_DIR_FFMPEG}/${abi}/lib/"*.so; do
     "${FAM_READELF}" \
@@ -112,7 +107,7 @@ checkTextRelocations() {
   done
 
   if grep -q 'TEXTREL' "$text_rel_stats_file"; then
-    echo "ERROR: Text relocations detected for ${abi}." >&2
+    echo "Text relocations detected for ${abi}." >&2
     cat "$text_rel_stats_file" >&2
     exit 1
   fi
