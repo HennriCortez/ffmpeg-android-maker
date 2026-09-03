@@ -2,9 +2,6 @@ name: Build Android FFmpeg ARM64
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
 
 jobs:
   build:
