@@ -151,16 +151,54 @@ jobs:
           echo "Static MediaCodec validation passed."
 
       - name: Package Android payload
+        shell: bash
         run: |
-          mkdir -p android-payload/arm64-v8a
-          ffmpeg_bin="$(find build -type f -path '*arm64-v8a*/ffmpeg' | head -n 1)"
-          cp "$ffmpeg_bin" android-payload/arm64-v8a/ffmpeg
-          cp -r output/lib/arm64-v8a android-payload/arm64-v8a/lib
-          cp stats/arm64-v8a-hwaccels.txt android-payload/arm64-v8a/
-          cp stats/arm64-v8a-decoders.txt android-payload/arm64-v8a/
-
+          set -euo pipefail
+      
+          ffmpeg_bin="output/bin/arm64-v8a/ffmpeg"
+      
+          if [[ ! -f "$ffmpeg_bin" ]]; then
+            ffmpeg_bin="$(find build -type f \
+              -path '*arm64-v8a*/bin/ffmpeg' \
+              -print -quit)"
+          fi
+      
+          if [[ -z "$ffmpeg_bin" || ! -f "$ffmpeg_bin" ]]; then
+            echo "Android ARM64 FFmpeg executable was not found." >&2
+            find build output -type f -name ffmpeg -print 2>/dev/null || true
+            exit 1
+          fi
+      
+          test -f "output/lib/arm64-v8a/libavcodec.so"
+          test -f "output/lib/arm64-v8a/libavformat.so"
+          test -f "output/lib/arm64-v8a/libavutil.so"
+      
+          mkdir -p android-payload/arm64-v8a/bin
+          mkdir -p android-payload/arm64-v8a/lib
+          mkdir -p android-payload/arm64-v8a/include
+      
+          cp "$ffmpeg_bin" \
+            android-payload/arm64-v8a/bin/ffmpeg
+      
+          cp -r output/lib/arm64-v8a/. \
+            android-payload/arm64-v8a/lib/
+      
+          if [[ -d "output/include/arm64-v8a" ]]; then
+            cp -r output/include/arm64-v8a/. \
+              android-payload/arm64-v8a/include/
+          fi
+      
+          if [[ -d stats ]]; then
+            cp -r stats android-payload/arm64-v8a/stats
+          fi
+      
+          chmod +x android-payload/arm64-v8a/bin/ffmpeg
+      
+          find android-payload -type f -print | sort
+          
       - name: Upload Android payload
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-android-arm64
           path: android-payload
+          if-no-files-found: error
