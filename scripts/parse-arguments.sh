@@ -12,6 +12,7 @@ SOURCE_TYPE=TAR
 SOURCE_VALUE=8.1.2
 EXTERNAL_LIBRARIES=()
 FFMPEG_GPL_ENABLED=false
+MEDIACODEC_ENABLED=true
 
 # All FREE libraries that are supported
 SUPPORTED_LIBRARIES_FREE=(
@@ -62,6 +63,12 @@ for argument in "$@"; do
   --android-api-level=* | -android=*)
     API_LEVEL="${argument#*=}"
     ;;
+    
+  --disable-mediacodec)
+    MEDIACODEC_ENABLED=true
+    ;;
+
+    
   # Checkout the particular tag in the FFmpeg's git repository
   --source-git-tag=*)
     SOURCE_TYPE=GIT_TAG
